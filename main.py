@@ -2,17 +2,19 @@ import json
 import os
 import time
 import math
+import platform
+import sys
 import tkinter as tk
 from tkinter import colorchooser
 from pathlib import Path
 
 
 # ============================================================
-# LEDos 1.4
+# LEDos 1.5
 # ============================================================
 
 OS_NAME = "LEDos 1"
-RELEASE_VERSION = "1.4"
+RELEASE_VERSION = "1.5"
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -2432,339 +2434,441 @@ class Paint:
 # ============================================================
 
 class Terminal:
+    """LEDos virtual terminal with filesystem and native package commands."""
+
+    REPOSITORY = {
+        "manual": {
+            "version": "1.0",
+            "description": "LEDos command reference and getting-started guide.",
+            "files": {
+                "README.TXT": (
+                    "LEDos Manual 1.0\n\n"
+                    "Use HELP in Terminal to see available commands.\n"
+                    "The C: drive is a virtual filesystem stored by LEDos.\n"
+                    "Use DIR, CD, MKDIR, TYPE, and DEL to manage virtual files.\n"
+                ),
+                "COMMANDS.TXT": (
+                    "FILESYSTEM: DIR, CD, MKDIR, DEL, TYPE, COPY, REN, PWD\n"
+                    "SYSTEM: HELP, VER, TIME, DATE, WHOAMI, SYSINFO, APPS\n"
+                    "TERMINAL: CLS, ECHO, EXIT\n"
+                    "PACKAGES: SEARCH, PACKAGES, INFO, INSTALL, INSTALLED, REMOVE\n"
+                ),
+            },
+        },
+        "examples": {
+            "version": "1.0",
+            "description": "Sample text files for experimenting with LEDos.",
+            "files": {
+                "HELLO.TXT": "Hello from the LEDos package repository!\n",
+                "IDEAS.TXT": "Ideas to try:\n- Make a folder\n- Write a note\n- Copy a file\n- Explore Terminal\n",
+            },
+        },
+        "devkit": {
+            "version": "1.0",
+            "description": "Starter notes and templates for LEDos experiments.",
+            "files": {
+                "README.TXT": "LEDos DevKit\n\nUse this folder for your own virtual projects.\n",
+                "TEMPLATE.PY": "# LEDos virtual project template\n# This file is stored in the virtual C: drive.\n",
+            },
+        },
+    }
+
     def __init__(self, app):
         self.app = app
         self.cwd = "C:"
 
-        self.win = LEDosWindow(
-            app,
-            "Terminal",
-            650,
-            450
-        )
-
+        self.win = LEDosWindow(app, "Terminal", 700, 480)
         content = self.win.content
 
         self.output = tk.Text(
-            content,
-            bg=BLACK,
-            fg=WHITE,
-            insertbackground=WHITE,
-            font=FONT,
-            state="disabled"
+            content, bg=BLACK, fg=WHITE, insertbackground=WHITE,
+            font=FONT, state="disabled", wrap="word"
         )
+        self.output.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self.output.pack(
-            fill="both",
-            expand=True,
-            padx=5,
-            pady=5
-        )
-
-        bottom = tk.Frame(
-            content,
-            bg=BLACK
-        )
-        bottom.pack(
-            fill="x"
-        )
+        bottom = tk.Frame(content, bg=BLACK)
+        bottom.pack(fill="x")
 
         self.prompt_label = tk.Label(
-            bottom,
-            text="C:>",
-            bg=BLACK,
-            fg=WHITE,
-            font=FONT
+            bottom, text="C:>", bg=BLACK, fg=WHITE, font=FONT
         )
-
-        self.prompt_label.pack(
-            side="left",
-            padx=4
-        )
+        self.prompt_label.pack(side="left", padx=4)
 
         self.entry = tk.Entry(
-            bottom,
-            bg=BLACK,
-            fg=WHITE,
-            insertbackground=WHITE,
-            relief="flat",
-            font=FONT
+            bottom, bg=BLACK, fg=WHITE, insertbackground=WHITE,
+            relief="flat", font=FONT
         )
-
-        self.entry.pack(
-            side="left",
-            fill="x",
-            expand=True
-        )
-
-        self.entry.bind(
-            "<Return>",
-            lambda event: self.execute()
-        )
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", lambda event: self.execute())
 
         self.write(
-            f"{OS_NAME} Terminal\n"
-            f"Release {RELEASE_VERSION}\n"
-            "Type HELP for commands.\n\n"
+            f"{OS_NAME} Terminal\nRelease {RELEASE_VERSION}\n"
+            "Virtual C: drive ready. Type HELP for commands.\n\n"
         )
-
         self.update_prompt()
-
         self.entry.focus_set()
 
     def write(self, text):
         try:
-            self.output.config(
-                state="normal"
-            )
-
-            self.output.insert(
-                tk.END,
-                text
-            )
-
-            self.output.see(
-                tk.END
-            )
-
-            self.output.config(
-                state="disabled"
-            )
-
+            self.output.config(state="normal")
+            self.output.insert(tk.END, str(text))
+            self.output.see(tk.END)
+            self.output.config(state="disabled")
         except tk.TclError:
             pass
 
     def update_prompt(self):
         try:
-            self.prompt_label.config(
-                text=self.cwd + ">"
-            )
+            self.prompt_label.config(text=self.cwd + ">")
         except tk.TclError:
             pass
 
+    def clear_output(self):
+        try:
+            self.output.config(state="normal")
+            self.output.delete("1.0", tk.END)
+            self.output.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    def resolve_path(self, value):
+        value = value.strip().strip('"')
+        if not value:
+            return self.cwd
+        if value.upper() in ("C:", "C:/", "C:\\"):
+            return "C:"
+        normalized = value.replace("\\", "/")
+        if normalized.startswith("C:/"):
+            return "/".join(self.app.fs.normalize_path(normalized))
+        if normalized.startswith("/"):
+            normalized = normalized.lstrip("/")
+        if self.cwd == "C:":
+            combined = "C:/" + normalized
+        else:
+            combined = self.cwd.rstrip("/") + "/" + normalized
+        return "/".join(self.app.fs.normalize_path(combined))
+
+    def package_root(self, name):
+        return f"C:/PROGRAMS/{name}"
+
+    def installed_package_names(self):
+        return [
+            entry["name"] for entry in self.app.fs.entries("C:/PROGRAMS")
+            if entry["type"] == "dir" and entry["name"].lower() in self.REPOSITORY
+            and self.app.fs.exists(self.package_root(entry["name"].lower()) + "/PACKAGE.INFO")
+        ]
+
+    def package_install(self, name):
+        name = name.lower()
+        package = self.REPOSITORY.get(name)
+        if not package:
+            self.write(f"Package not found: {name}\nUse SEARCH to browse the repository.\n")
+            return
+
+        root = self.package_root(name)
+        if self.app.fs.exists(root):
+            if self.app.fs.exists(root + "/PACKAGE.INFO"):
+                self.write(f"{name} is already installed.\n")
+            else:
+                self.write(f"Cannot install {name}: destination already exists.\n")
+            return
+
+        if not self.app.fs.mkdir(root):
+            self.write("Installation failed: could not create package directory.\n")
+            return
+
+        info = (
+            f"Name: {name}\nVersion: {package['version']}\n"
+            f"Description: {package['description']}\n"
+            "Source: LEDos built-in repository\n"
+        )
+        success = self.app.fs.write_file(root + "/PACKAGE.INFO", info)
+        for filename, content in package["files"].items():
+            success = self.app.fs.write_file(root + "/" + filename, content) and success
+
+        if success:
+            self.write(f"Installed {name} {package['version']} successfully.\n")
+        else:
+            self.write("Installation was incomplete. Check C:/PROGRAMS.\n")
+
+    def package_remove(self, name):
+        name = name.lower()
+        if name not in self.REPOSITORY:
+            self.write(f"Unknown package: {name}\n")
+            return
+        root = self.package_root(name)
+        if not self.app.fs.exists(root + "/PACKAGE.INFO"):
+            self.write(f"{name} is not installed.\n")
+            return
+        # Remove only files owned by this package; leave unexpected user files alone.
+        package = self.REPOSITORY[name]
+        for filename in list(package["files"].keys()) + ["PACKAGE.INFO"]:
+            self.app.fs.delete(root + "/" + filename)
+        remaining = self.app.fs.entries(root)
+        if not remaining:
+            self.app.fs.delete(root)
+            self.write(f"Removed {name}.\n")
+        else:
+            self.write(f"Removed managed files from {name}; folder kept because it contains other files.\n")
+
     def execute(self):
         command = self.entry.get().strip()
-
-        self.entry.delete(
-            0,
-            tk.END
-        )
-
+        self.entry.delete(0, tk.END)
         if not command:
             return
 
-        self.write(
-            self.cwd
-            + ">"
-            + command
-            + "\n"
-        )
-
-        parts = command.split()
-
-        cmd = parts[0].upper()
-        args = parts[1:]
+        self.write(f"{self.cwd}>{command}\n")
+        # Split once so file/folder names and ECHO text may contain spaces.
+        pieces = command.split(maxsplit=1)
+        cmd = pieces[0].upper()
+        rest = pieces[1].strip() if len(pieces) > 1 else ""
+        args = rest.split(maxsplit=1) if rest else []
 
         if cmd == "HELP":
             self.write(
-                "HELP  DIR  CD  MKDIR  DEL  TYPE\n"
-                "CLS   VER  TIME DATE EXIT\n\n"
+                "LEDos Terminal Commands\n"
+                "HELP       Show this command list\n"
+                "DIR        List the current directory\n"
+                "CD         Change directory (CD .. goes up)\n"
+                "PWD        Show current directory\n"
+                "MKDIR      Create a directory\n"
+                "DEL        Delete a virtual file/folder\n"
+                "TYPE       Display a text file\n"
+                "COPY       Copy a virtual file\n"
+                "REN        Rename a virtual file/folder\n"
+                "ECHO       Print text\n"
+                "CLS        Clear the terminal\n"
+                "VER        Show LEDos version\n"
+                "TIME/DATE  Show current time/date\n"
+                "WHOAMI     Show current user\n"
+                "SYSINFO    Show system information\n"
+                "APPS       List built-in applications\n"
+                "SEARCH     Search the package repository\n"
+                "PACKAGES   List repository packages\n"
+                "INFO       Show package details\n"
+                "INSTALL    Install a repository package\n"
+                "INSTALLED  List installed packages\n"
+                "REMOVE     Remove an installed package\n"
+                "EXIT       Close Terminal\n\n"
+                "Paths are virtual C: paths. Quote paths containing spaces.\n\n"
             )
 
         elif cmd == "DIR":
-            entries = self.app.fs.entries(
-                self.cwd
-            )
-
+            path = self.resolve_path(rest) if rest else self.cwd
+            node = self.app.fs.get_node(path)
+            if not node or node.get("type") != "dir":
+                self.write("Directory not found.\n")
+                return
+            entries = self.app.fs.entries(path)
+            self.write(f"Directory of {path}\n\n")
             if not entries:
-                self.write(
-                    "Directory is empty.\n"
-                )
+                self.write("Directory is empty.\n")
             else:
-                for entry in entries:
-                    prefix = (
-                        "<DIR> "
-                        if entry["type"] == "dir"
-                        else "      "
-                    )
-
-                    self.write(
-                        prefix
-                        + entry["name"]
-                        + "\n"
-                    )
+                for item in entries:
+                    prefix = "<DIR> " if item["type"] == "dir" else "      "
+                    self.write(prefix + item["name"] + "\n")
+            self.write("\n")
 
         elif cmd == "CD":
-            if not args:
-                self.write(
-                    self.cwd + "\n"
-                )
+            if not rest:
+                self.write(self.cwd + "\n")
                 return
-
-            target = args[0]
-
-            if target == "..":
-                path_parts = (
-                    self.app.fs.normalize_path(
-                        self.cwd
-                    )
-                )
-
-                if len(path_parts) > 1:
-                    path_parts.pop()
-
-                self.cwd = "/".join(
-                    path_parts
-                )
-
-                self.update_prompt()
-                return
-
-            if target.upper() == "C:":
-                self.cwd = "C:"
-                self.update_prompt()
-                return
-
-            path = (
-                self.cwd
-                + "/"
-                + target
-            )
-
-            node = self.app.fs.get_node(
-                path
-            )
-
-            if (
-                node
-                and node.get("type")
-                == "dir"
-            ):
+            path = self.resolve_path(rest)
+            node = self.app.fs.get_node(path)
+            if node and node.get("type") == "dir":
                 self.cwd = path
                 self.update_prompt()
             else:
-                self.write(
-                    "Directory not found.\n"
-                )
+                self.write("Directory not found.\n")
+
+        elif cmd == "PWD":
+            self.write(self.cwd + "\n")
 
         elif cmd == "MKDIR":
-            if not args:
-                self.write(
-                    "Usage: MKDIR <name>\n"
-                )
+            if not rest:
+                self.write("Usage: MKDIR <name or path>\n")
                 return
-
-            path = (
-                self.cwd
-                + "/"
-                + args[0]
-            )
-
+            path = self.resolve_path(rest)
             if self.app.fs.mkdir(path):
-                self.write(
-                    "Directory created.\n"
-                )
+                self.write(f"Directory created: {path}\n")
             else:
-                self.write(
-                    "Could not create directory.\n"
-                )
+                self.write("Could not create directory (invalid name, parent missing, or already exists).\n")
 
         elif cmd == "DEL":
-            if not args:
-                self.write(
-                    "Usage: DEL <name>\n"
-                )
+            if not rest:
+                self.write("Usage: DEL <name or path>\n")
                 return
-
-            path = (
-                self.cwd
-                + "/"
-                + args[0]
-            )
-
+            path = self.resolve_path(rest)
+            if path == "C:" or path.upper() in ("C:/SYSTEM",):
+                self.write("Protected system path.\n")
+                return
             if self.app.fs.delete(path):
-                self.write(
-                    "Deleted.\n"
-                )
+                self.write(f"Deleted: {path}\n")
+                if self.cwd == path or self.cwd.startswith(path.rstrip("/") + "/"):
+                    self.cwd = "C:"
+                    self.update_prompt()
             else:
-                self.write(
-                    "File or directory not found.\n"
-                )
+                self.write("File or directory not found.\n")
 
         elif cmd == "TYPE":
-            if not args:
-                self.write(
-                    "Usage: TYPE <file>\n"
-                )
+            if not rest:
+                self.write("Usage: TYPE <file path>\n")
                 return
-
-            path = (
-                self.cwd
-                + "/"
-                + args[0]
-            )
-
-            content = self.app.fs.read_file(
-                path
-            )
-
+            path = self.resolve_path(rest)
+            content = self.app.fs.read_file(path)
             if content is None:
-                self.write(
-                    "File not found.\n"
-                )
+                self.write("File not found.\n")
             else:
-                self.write(
-                    content
-                    + "\n"
-                )
+                self.write(str(content) + ("" if str(content).endswith("\n") else "\n"))
+
+        elif cmd == "COPY":
+            copy_args = rest.split(maxsplit=1)
+            if len(copy_args) != 2:
+                self.write('Usage: COPY <source> <destination> (quote paths containing spaces)\n')
+                return
+            source = self.resolve_path(copy_args[0])
+            destination = self.resolve_path(copy_args[1])
+            content = self.app.fs.read_file(source)
+            if content is None:
+                self.write("Source file not found.\n")
+            elif self.app.fs.exists(destination):
+                self.write("Destination already exists.\n")
+            elif self.app.fs.write_file(destination, content):
+                self.write("File copied.\n")
+            else:
+                self.write("Copy failed. Make sure the destination folder exists.\n")
+
+        elif cmd == "REN":
+            rename_args = rest.split(maxsplit=1)
+            if len(rename_args) != 2:
+                self.write("Usage: REN <source path> <new name>\n")
+                return
+            source = self.resolve_path(rename_args[0])
+            new_name = rename_args[1].strip().strip('"')
+            if not self.app.fs.valid_name(new_name):
+                self.write("Invalid new name.\n")
+                return
+            parts = self.app.fs.normalize_path(source)
+            if len(parts) <= 1 or not self.app.fs.exists(source):
+                self.write("Source not found.\n")
+                return
+            destination = "/".join(parts[:-1] + [new_name])
+            if self.app.fs.exists(destination):
+                self.write("An item with that name already exists.\n")
+                return
+            node = self.app.fs.get_node(source)
+            parent = self.app.fs.get_node("/".join(parts[:-1]))
+            if not parent or not isinstance(parent.get("children"), dict):
+                self.write("Rename failed.\n")
+                return
+            parent["children"][new_name] = node
+            del parent["children"][parts[-1]]
+            self.app.fs.save()
+            if self.cwd == source:
+                self.cwd = destination
+                self.update_prompt()
+            self.write(f"Renamed to {destination}\n")
+
+        elif cmd == "ECHO":
+            self.write((rest if rest else "") + "\n")
 
         elif cmd == "CLS":
-            try:
-                self.output.config(
-                    state="normal"
-                )
-
-                self.output.delete(
-                    "1.0",
-                    tk.END
-                )
-
-                self.output.config(
-                    state="disabled"
-                )
-            except tk.TclError:
-                pass
+            self.clear_output()
 
         elif cmd == "VER":
-            self.write(
-                f"{OS_NAME}\n"
-                f"Release {RELEASE_VERSION}\n"
-            )
+            self.write(f"{OS_NAME} {RELEASE_VERSION}\n")
 
         elif cmd == "TIME":
-            self.write(
-                time.strftime(
-                    "%H:%M:%S"
-                )
-                + "\n"
-            )
+            self.write(time.strftime("%H:%M:%S") + "\n")
 
         elif cmd == "DATE":
+            self.write(time.strftime("%Y-%m-%d") + "\n")
+
+        elif cmd == "WHOAMI":
+            self.write(str(getattr(self.app, "username", "User")) + "\n")
+
+        elif cmd == "SYSINFO":
             self.write(
-                time.strftime(
-                    "%Y-%m-%d"
-                )
-                + "\n"
+                f"Operating system: {OS_NAME}\n"
+                f"Release: {RELEASE_VERSION}\n"
+                f"Host platform: {platform.system()} {platform.release()}\n"
+                f"Python: {platform.python_version()}\n"
+                f"Architecture: {platform.machine() or 'Unknown'}\n"
+                f"User: {getattr(self.app, 'username', 'User')}\n"
+                "Storage: LEDos virtual C: drive\n"
+                "Graphics: Tkinter\n\n"
             )
+
+        elif cmd == "APPS":
+            self.write(
+                "Built-in applications\n"
+                "- File Manager\n- Notepad\n- Calculator\n"
+                "- Paint (with animation frames)\n- Clock\n- Terminal\n"
+                "- Settings\n- About LEDos\n\n"
+            )
+
+        elif cmd == "SEARCH":
+            query = rest.lower()
+            matches = [
+                (name, package) for name, package in self.REPOSITORY.items()
+                if not query or query in name or query in package["description"].lower()
+            ]
+            if not matches:
+                self.write("No packages matched your search.\n")
+            else:
+                for name, package in matches:
+                    status = " [installed]" if name in [n.lower() for n in self.installed_package_names()] else ""
+                    self.write(f"{name} {package['version']}{status} - {package['description']}\n")
+                self.write("\n")
+
+        elif cmd == "PACKAGES":
+            self.write("LEDos built-in package repository\n")
+            for name, package in self.REPOSITORY.items():
+                self.write(f"{name:<12} {package['version']:<6} {package['description']}\n")
+            self.write("\nUse INSTALL <package> to install one.\n\n")
+
+        elif cmd == "INFO":
+            name = rest.lower()
+            package = self.REPOSITORY.get(name)
+            if not name:
+                self.write("Usage: INFO <package>\n")
+            elif not package:
+                self.write(f"Package not found: {name}\n")
+            else:
+                status = "Installed" if name in [n.lower() for n in self.installed_package_names()] else "Not installed"
+                self.write(
+                    f"{name} {package['version']}\n{package['description']}\n"
+                    f"Status: {status}\nFiles: {', '.join(package['files'])}\n\n"
+                )
+
+        elif cmd == "INSTALL":
+            if not rest:
+                self.write("Usage: INSTALL <package>\n")
+            else:
+                self.package_install(rest)
+
+        elif cmd == "INSTALLED":
+            installed = self.installed_package_names()
+            if not installed:
+                self.write("No LEDos packages are installed. Use PACKAGES to browse.\n")
+            else:
+                self.write("Installed packages\n")
+                for name in installed:
+                    package = self.REPOSITORY.get(name.lower(), {})
+                    self.write(f"{name} {package.get('version', '')}\n")
+                self.write("\n")
+
+        elif cmd == "REMOVE":
+            if not rest:
+                self.write("Usage: REMOVE <package>\n")
+            else:
+                self.package_remove(rest)
 
         elif cmd == "EXIT":
             self.win.close()
 
         else:
-            self.write(
-                "Unknown command.\n"
-            )
-
+            self.write(f"Unknown command: {cmd}\nType HELP for a list of commands.\n")
 
 # ============================================================
 # CLOCK
